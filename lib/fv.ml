@@ -28,7 +28,7 @@ let pexp_list_literal ~loc es =
 let pexp_list_concat ~loc es =
   pexp_apply ~loc
     (pexp_ident ~loc { loc; txt = Longident.parse "List.concat" })
-    (List.map ~f:(fun x -> (Nolabel, x)) es)
+    [ (Nolabel, pexp_list_literal ~loc es) ]
 
 let fv_name type_name = { txt = "fv_of_" ^ type_name.txt; loc = type_name.loc }
 
@@ -108,7 +108,7 @@ let fv_impl ~ptype_name (cds : constructor_declaration list) =
         { pc_lhs; pc_guard = None; pc_rhs }
   in
   let body = pexp_match ~loc pexp_input (List.map ~f:mk_match_case cds) in
-  pstr_value ~loc Nonrecursive
+  pstr_value ~loc Recursive
     [
       {
         pvb_pat = ppat_var ~loc (fv_name ptype_name);
