@@ -2,7 +2,7 @@
  (public_name ppx_language_design)
  (name ppx_language_design)
   (modules
-    myshow
+    fv
   )
  (kind ppx_rewriter)
  (libraries ppx_deriving ppxlib ppx_derivers)
