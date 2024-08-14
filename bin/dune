@@ -1,0 +1,4 @@
+(executable
+ (public_name ppx_language_design)
+ (name main)
+ (libraries ppx_language_design))

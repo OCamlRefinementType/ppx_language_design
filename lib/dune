@@ -1,0 +1,9 @@
+(library
+ (public_name ppx_language_design)
+ (name ppx_language_design)
+  (modules
+    myshow
+  )
+ (kind ppx_rewriter)
+ (libraries ppx_deriving ppxlib ppx_derivers)
+)
