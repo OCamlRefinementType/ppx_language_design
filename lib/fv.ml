@@ -78,11 +78,10 @@ let fv_impl ~ptype_name (cds : constructor_declaration list) =
     match cd.pcd_args with
     | Pcstr_record _ -> failwith "unimp recorde type"
     | Pcstr_tuple ct_list ->
-        let id_ct_list = List.mapi ~f:(fun i ct -> (i, ct)) ct_list in
         let args, pexp_gathared_fvs =
           List.split
-          @@ List.map
-               ~f:(fun (i, ct) ->
+          @@ List.mapi
+               ~f:(fun i ct ->
                  let loc = ct.ptyp_loc in
                  match type_to_fv_function ct with
                  | None -> (ppat_any ~loc, None)
@@ -90,7 +89,7 @@ let fv_impl ~ptype_name (cds : constructor_declaration list) =
                      ( ppat_tmp_var ~loc i,
                        Some (pexp_nolabel_apply ~loc f [ pexp_tmp_var ~loc i ])
                      ))
-               id_ct_list
+               ct_list
         in
         let pc_lhs =
           ppat_variant ~loc cd.pcd_name.txt (ppat_tuple_or_nothing ~loc args)
