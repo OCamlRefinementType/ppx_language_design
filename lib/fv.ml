@@ -2,6 +2,9 @@ open Ppxlib
 module List = ListLabels
 open Ast_builder.Default
 
+let ppat_tuple_or_nothing ~loc es =
+  if 0 == List.length es then None else Some (ppat_tuple ~loc es)
+
 let pexp_nolabel_apply ~loc f args =
   pexp_apply ~loc f (List.map ~f:(fun x -> (Nolabel, x)) args)
 
@@ -29,9 +32,13 @@ let pexp_list_literal ~loc es =
     es ~init:(pexp_empty_list ~loc)
 
 let pexp_list_concat ~loc es =
-  pexp_apply ~loc
-    (pexp_ident ~loc { loc; txt = Longident.parse "List.concat" })
-    [ (Nolabel, pexp_list_literal ~loc es) ]
+  match es with
+  | [] -> pexp_empty_list ~loc
+  | [ x ] -> x
+  | _ ->
+      pexp_nolabel_apply ~loc
+        (pexp_ident ~loc { loc; txt = Longident.parse "List.concat" })
+        [ pexp_list_literal ~loc es ]
 
 let fv_name type_name = { txt = "fv_of_" ^ type_name.txt; loc = type_name.loc }
 
@@ -40,84 +47,47 @@ let is_free_var_type ct =
     ~f:(fun attr -> String.equal "free" attr.attr_name.txt)
     ct.ptyp_attributes
 
-let is_in_container f ct =
-  match ct.ptyp_desc with
-  | Ptyp_constr (ld_constr, [ arg ]) -> if f arg then Some ld_constr else None
-  | Ptyp_constr (_, []) -> None
-  | Ptyp_constr (_, _) -> failwith "unimp constructor with multiple args"
-  | _ -> None
-
-let is_free_var_type_container = is_in_container is_free_var_type
-let is_cur_type cur_ct_name ct = String.equal cur_ct_name (layout_core_type ct)
-
-let is_cur_type_container cur_ct_name =
-  is_in_container (is_cur_type cur_ct_name)
-
 let fv_impl ~ptype_name (cds : constructor_declaration list) =
   let loc = ptype_name.loc in
   let pexp_input = pexp_ident ~loc { loc; txt = lident "input" } in
-  let self = pexp_ident ~loc (map_loc lident @@ fv_name ptype_name) in
-  let id = pexp_ident ~loc { loc; txt = lident "__id" } in
+  let fv_expr name = pexp_ident ~loc (map_loc lident @@ fv_name name) in
+  let self = fv_expr ptype_name in
+  let id = pexp_ident ~loc { loc; txt = lident "_singleton_list" } in
+  let rec type_to_fv_function ct =
+    let loc = ct.ptyp_loc in
+    match ct.ptyp_desc with
+    | Ptyp_constr (ld_constr, [])
+      when is_free_var_type ct
+           && 0 == Longident.compare ld_constr.txt (lident "string") ->
+        Some id
+    | Ptyp_constr (ld_constr, [])
+      when 0 == Longident.compare ld_constr.txt (lident ptype_name.txt) ->
+        Some self
+    | Ptyp_constr (_, []) -> None
+    | Ptyp_constr (ld_constr, [ arg ]) -> (
+        match type_to_fv_function arg with
+        | None -> None
+        | Some f ->
+            let label = map_loc Longident.last_exn ld_constr in
+            Some (pexp_nolabel_apply ~loc (fv_expr label) [ f ]))
+    | Ptyp_constr (_, _) -> failwith "unimp constructor with multiple args"
+    | _ -> None
+  in
   let mk_match_case (cd : constructor_declaration) =
     let loc = cd.pcd_loc in
     match cd.pcd_args with
     | Pcstr_record _ -> failwith "unimp recorde type"
     | Pcstr_tuple ct_list ->
         let id_ct_list = List.mapi ~f:(fun i ct -> (i, ct)) ct_list in
-        let free_index =
-          List.filter ~f:(fun (_, ct) -> is_free_var_type ct) id_ct_list
-        in
-        let pexp_direct_fvs =
-          List.map
-            ~f:(fun (i, _) ->
-              (i, pexp_list_literal ~loc [ pexp_tmp_var ~loc i ]))
-            free_index
-        in
-        let pexp_direct_fvs_containers =
-          List.filter_map
-            ~f:(fun (i, ct) ->
-              match is_free_var_type_container ct with
-              | None -> None
-              | Some ld_constr ->
-                  Some
-                    ( i,
-                      pexp_nolabel_apply ~loc
-                        (pexp_ident ~loc
-                           (map_loc lident @@ fv_name
-                           @@ map_loc Longident.last_exn ld_constr))
-                        [ id; pexp_tmp_var ~loc i ] ))
-            id_ct_list
-        in
-        let pexp_selfs =
-          List.filter_map
-            ~f:(fun (i, ct) ->
-              if is_cur_type ptype_name.txt ct then
-                Some (i, pexp_nolabel_apply ~loc self [ pexp_tmp_var ~loc i ])
-              else None)
-            id_ct_list
-        in
-        let self_containers =
-          List.filter_map
-            ~f:(fun (i, ct) ->
-              match is_cur_type_container ptype_name.txt ct with
-              | Some ld_constr -> Some (i, ld_constr)
-              | None -> None)
-            id_ct_list
-        in
-        let pexp_self_containers =
-          List.map
-            ~f:(fun (i, ld_constr) ->
-              ( i,
-                pexp_nolabel_apply ~loc
-                  (pexp_ident ~loc
-                     (map_loc lident @@ fv_name
-                     @@ map_loc Longident.last_exn ld_constr))
-                  [ self; pexp_tmp_var ~loc i ] ))
-            self_containers
-        in
         let pexp_gathared_fvs =
-          pexp_direct_fvs @ pexp_selfs @ pexp_direct_fvs_containers
-          @ pexp_self_containers
+          List.filter_map
+            ~f:(fun (i, ct) ->
+              let loc = ct.ptyp_loc in
+              match type_to_fv_function ct with
+              | None -> None
+              | Some f ->
+                  Some (i, pexp_nolabel_apply ~loc f [ pexp_tmp_var ~loc i ]))
+            id_ct_list
         in
         let args =
           List.map
@@ -127,10 +97,9 @@ let fv_impl ~ptype_name (cds : constructor_declaration list) =
               else ppat_any ~loc)
             id_ct_list
         in
-        let ppat_args =
-          if List.length args == 0 then None else Some (ppat_tuple ~loc args)
+        let pc_lhs =
+          ppat_variant ~loc cd.pcd_name.txt (ppat_tuple_or_nothing ~loc args)
         in
-        let pc_lhs = ppat_variant ~loc cd.pcd_name.txt ppat_args in
         let pc_rhs =
           pexp_list_concat ~loc (List.map ~f:snd pexp_gathared_fvs)
         in
