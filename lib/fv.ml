@@ -2,6 +2,9 @@ open Ppxlib
 module List = ListLabels
 open Ast_builder.Default
 
+let pexp_nolabel_apply ~loc f args =
+  pexp_apply ~loc f (List.map ~f:(fun x -> (Nolabel, x)) args)
+
 let layout_ f t =
   let _ = Format.flush_str_formatter () in
   f Format.str_formatter t;
@@ -37,24 +40,24 @@ let is_free_var_type ct =
     ~f:(fun attr -> String.equal "free" attr.attr_name.txt)
     ct.ptyp_attributes
 
-let is_cur_type_container cur_ct_name ct =
+let is_in_container f ct =
   match ct.ptyp_desc with
-  | Ptyp_constr (ld_constr, [ arg ]) ->
-      (* let () = *)
-      (*   Printf.printf "compare: %s == %s? %b\n" cur_ct_name *)
-      (*     (layout_core_type arg) *)
-      (*     (String.equal cur_ct_name (layout_core_type arg)) *)
-      (* in *)
-      if String.equal cur_ct_name (layout_core_type arg) then Some ld_constr
-      else None
+  | Ptyp_constr (ld_constr, [ arg ]) -> if f arg then Some ld_constr else None
   | Ptyp_constr (_, []) -> None
   | Ptyp_constr (_, _) -> failwith "unimp constructor with multiple args"
   | _ -> None
+
+let is_free_var_type_container = is_in_container is_free_var_type
+let is_cur_type cur_ct_name ct = String.equal cur_ct_name (layout_core_type ct)
+
+let is_cur_type_container cur_ct_name =
+  is_in_container (is_cur_type cur_ct_name)
 
 let fv_impl ~ptype_name (cds : constructor_declaration list) =
   let loc = ptype_name.loc in
   let pexp_input = pexp_ident ~loc { loc; txt = lident "input" } in
   let self = pexp_ident ~loc (map_loc lident @@ fv_name ptype_name) in
+  let id = pexp_ident ~loc { loc; txt = lident "__id" } in
   let mk_match_case (cd : constructor_declaration) =
     let loc = cd.pcd_loc in
     match cd.pcd_args with
@@ -70,7 +73,30 @@ let fv_impl ~ptype_name (cds : constructor_declaration list) =
               (i, pexp_list_literal ~loc [ pexp_tmp_var ~loc i ]))
             free_index
         in
-        let containers =
+        let pexp_direct_fvs_containers =
+          List.filter_map
+            ~f:(fun (i, ct) ->
+              match is_free_var_type_container ct with
+              | None -> None
+              | Some ld_constr ->
+                  Some
+                    ( i,
+                      pexp_nolabel_apply ~loc
+                        (pexp_ident ~loc
+                           (map_loc lident @@ fv_name
+                           @@ map_loc Longident.last_exn ld_constr))
+                        [ id; pexp_tmp_var ~loc i ] ))
+            id_ct_list
+        in
+        let pexp_selfs =
+          List.filter_map
+            ~f:(fun (i, ct) ->
+              if is_cur_type ptype_name.txt ct then
+                Some (i, pexp_nolabel_apply ~loc self [ pexp_tmp_var ~loc i ])
+              else None)
+            id_ct_list
+        in
+        let self_containers =
           List.filter_map
             ~f:(fun (i, ct) ->
               match is_cur_type_container ptype_name.txt ct with
@@ -78,24 +104,27 @@ let fv_impl ~ptype_name (cds : constructor_declaration list) =
               | None -> None)
             id_ct_list
         in
-        let pexp_containers =
+        let pexp_self_containers =
           List.map
             ~f:(fun (i, ld_constr) ->
               ( i,
-                pexp_apply ~loc
+                pexp_nolabel_apply ~loc
                   (pexp_ident ~loc
                      (map_loc lident @@ fv_name
                      @@ map_loc Longident.last_exn ld_constr))
-                  [ (Nolabel, self); (Nolabel, pexp_tmp_var ~loc i) ] ))
-            containers
+                  [ self; pexp_tmp_var ~loc i ] ))
+            self_containers
         in
-        let pexp_gathared_fvs = pexp_direct_fvs @ pexp_containers in
+        let pexp_gathared_fvs =
+          pexp_direct_fvs @ pexp_selfs @ pexp_direct_fvs_containers
+          @ pexp_self_containers
+        in
         let args =
-          List.filter_map
+          List.map
             ~f:(fun (i, _) ->
               if List.exists ~f:(fun (j, _) -> i == j) pexp_gathared_fvs then
-                Some (ppat_tmp_var ~loc i)
-              else None)
+                ppat_tmp_var ~loc i
+              else ppat_any ~loc)
             id_ct_list
         in
         let ppat_args =
