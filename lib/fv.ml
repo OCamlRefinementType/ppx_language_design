@@ -79,29 +79,25 @@ let fv_impl ~ptype_name (cds : constructor_declaration list) =
     | Pcstr_record _ -> failwith "unimp recorde type"
     | Pcstr_tuple ct_list ->
         let id_ct_list = List.mapi ~f:(fun i ct -> (i, ct)) ct_list in
-        let pexp_gathared_fvs =
-          List.filter_map
-            ~f:(fun (i, ct) ->
-              let loc = ct.ptyp_loc in
-              match type_to_fv_function ct with
-              | None -> None
-              | Some f ->
-                  Some (i, pexp_nolabel_apply ~loc f [ pexp_tmp_var ~loc i ]))
-            id_ct_list
-        in
-        let args =
-          List.map
-            ~f:(fun (i, _) ->
-              if List.exists ~f:(fun (j, _) -> i == j) pexp_gathared_fvs then
-                ppat_tmp_var ~loc i
-              else ppat_any ~loc)
-            id_ct_list
+        let args, pexp_gathared_fvs =
+          List.split
+          @@ List.map
+               ~f:(fun (i, ct) ->
+                 let loc = ct.ptyp_loc in
+                 match type_to_fv_function ct with
+                 | None -> (ppat_any ~loc, None)
+                 | Some f ->
+                     ( ppat_tmp_var ~loc i,
+                       Some (pexp_nolabel_apply ~loc f [ pexp_tmp_var ~loc i ])
+                     ))
+               id_ct_list
         in
         let pc_lhs =
           ppat_variant ~loc cd.pcd_name.txt (ppat_tuple_or_nothing ~loc args)
         in
         let pc_rhs =
-          pexp_list_concat ~loc (List.map ~f:snd pexp_gathared_fvs)
+          pexp_list_concat ~loc
+            (List.filter_map ~f:(fun x -> x) pexp_gathared_fvs)
         in
         { pc_lhs; pc_guard = None; pc_rhs }
   in
